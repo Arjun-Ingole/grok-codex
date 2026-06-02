@@ -1,0 +1,526 @@
+#!/usr/bin/env bash
+# grok-codex: Use your OpenAI Codex subscription with Grok CLI
+# https://github.com/Arjun-Ingole/grok-codex
+
+set -euo pipefail
+
+VERSION="0.1.0"
+PROXY_PORT="${GROK_CODEX_PORT:-10531}"
+GROK_HOME="${GROK_HOME:-$HOME/.grok}"
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+WRAPPER_NAME="grok-with-codex"
+CONFIG_MARKER="# --- grok-codex managed ---"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+DIM='\033[2m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+info()  { printf "${BLUE}info${RESET}  %s\n" "$1"; }
+ok()    { printf "${GREEN}ok${RESET}    %s\n" "$1"; }
+warn()  { printf "${YELLOW}warn${RESET}  %s\n" "$1"; }
+error() { printf "${RED}error${RESET} %s\n" "$1" >&2; }
+fatal() { error "$1"; exit 1; }
+
+# --- Helpers ---
+
+detect_shell() {
+    local shell_name
+    shell_name=$(basename "${SHELL:-/bin/bash}")
+    echo "$shell_name"
+}
+
+shell_rc_file() {
+    case "$(detect_shell)" in
+        zsh)  echo "$HOME/.zshrc" ;;
+        bash)
+            if [[ -f "$HOME/.bash_profile" ]]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.bashrc"
+            fi
+            ;;
+        fish) echo "$HOME/.config/fish/config.fish" ;;
+        *)    echo "$HOME/.profile" ;;
+    esac
+}
+
+find_grok_binary() {
+    # Find the real grok binary (not our wrapper)
+    local grok_bin=""
+
+    # Check if grok is in GROK_HOME/bin (standard install)
+    if [[ -L "$GROK_HOME/bin/grok" ]]; then
+        grok_bin=$(readlink -f "$GROK_HOME/bin/grok" 2>/dev/null || readlink "$GROK_HOME/bin/grok")
+    elif [[ -x "$GROK_HOME/bin/grok" ]]; then
+        grok_bin="$GROK_HOME/bin/grok"
+    fi
+
+    # Fallback: search PATH but skip our wrapper
+    if [[ -z "$grok_bin" || ! -x "$grok_bin" ]]; then
+        grok_bin=$(which grok 2>/dev/null || true)
+    fi
+
+    if [[ -z "$grok_bin" ]]; then
+        fatal "Could not find grok binary. Install it first: curl -fsSL https://x.ai/cli/install.sh | bash"
+    fi
+
+    echo "$grok_bin"
+}
+
+check_codex_auth() {
+    local auth_file=""
+    for f in "$CODEX_HOME/auth.json" "$HOME/.chatgpt-local/auth.json"; do
+        if [[ -f "$f" ]]; then
+            auth_file="$f"
+            break
+        fi
+    done
+
+    if [[ -z "$auth_file" ]]; then
+        return 1
+    fi
+    echo "$auth_file"
+}
+
+check_npm() {
+    if ! command -v npm &>/dev/null; then
+        fatal "npm is required. Install Node.js from https://nodejs.org"
+    fi
+}
+
+check_openai_oauth() {
+    command -v openai-oauth &>/dev/null
+}
+
+# --- Commands ---
+
+cmd_setup() {
+    printf "${BOLD}grok-codex${RESET} v%s — setup\n\n" "$VERSION"
+
+    # 1. Check prerequisites
+    info "Checking prerequisites..."
+
+    # Check grok is installed
+    local grok_bin
+    grok_bin=$(find_grok_binary)
+    ok "Grok CLI found: $grok_bin"
+
+    # Check npm
+    check_npm
+    ok "npm available"
+
+    # 2. Install openai-oauth proxy
+    if check_openai_oauth; then
+        ok "openai-oauth already installed"
+    else
+        info "Installing openai-oauth..."
+        npm install -g openai-oauth
+        if check_openai_oauth; then
+            ok "openai-oauth installed"
+        else
+            fatal "Failed to install openai-oauth"
+        fi
+    fi
+
+    # 3. Check Codex auth
+    local auth_file
+    if auth_file=$(check_codex_auth); then
+        ok "Codex auth found: $auth_file"
+    else
+        warn "No Codex auth found. Logging in..."
+        npx @openai/codex login
+        if ! auth_file=$(check_codex_auth); then
+            fatal "Codex login failed. Run 'npx @openai/codex login' manually."
+        fi
+        ok "Codex auth created"
+    fi
+
+    # 4. Create wrapper script
+    info "Creating wrapper script..."
+    create_wrapper "$grok_bin"
+    ok "Created $GROK_HOME/bin/$WRAPPER_NAME"
+
+    # 5. Update grok config
+    info "Configuring Grok models..."
+    update_grok_config
+    ok "Updated $GROK_HOME/config.toml"
+
+    # 6. Add shell alias
+    info "Adding shell alias..."
+    add_shell_alias
+    local rc_file
+    rc_file=$(shell_rc_file)
+    ok "Added alias to $rc_file"
+
+    # Done
+    printf "\n${GREEN}${BOLD}Setup complete!${RESET}\n\n"
+    printf "Available models via your Codex subscription:\n"
+    printf "  ${BOLD}gpt-5.5${RESET}         — newest frontier model (default)\n"
+    printf "  ${BOLD}gpt-5.4${RESET}         — flagship + stronger reasoning\n"
+    printf "  ${BOLD}gpt-5.4-mini${RESET}    — fast mini for lighter tasks\n"
+    printf "  ${BOLD}gpt-5.3-codex${RESET}   — industry-leading coding model\n"
+    printf "  ${BOLD}gpt-5.2${RESET}         — previous gen, deep deliberation\n"
+    printf "\nUsage:\n"
+    printf "  ${DIM}# Open new terminal or source your shell rc, then:${RESET}\n"
+    printf "  grok              ${DIM}# starts TUI with GPT-5.5${RESET}\n"
+    printf "  grok -m gpt-5.4   ${DIM}# use a different model${RESET}\n"
+    printf "  grok models       ${DIM}# list all available models${RESET}\n"
+    printf "\nIf your Codex auth expires:\n"
+    printf "  npx @openai/codex login\n\n"
+}
+
+cmd_uninstall() {
+    printf "${BOLD}grok-codex${RESET} v%s — uninstall\n\n" "$VERSION"
+
+    # Remove wrapper
+    if [[ -f "$GROK_HOME/bin/$WRAPPER_NAME" ]]; then
+        rm "$GROK_HOME/bin/$WRAPPER_NAME"
+        ok "Removed wrapper script"
+    fi
+
+    # Remove shell alias
+    local rc_file
+    rc_file=$(shell_rc_file)
+    if [[ -f "$rc_file" ]] && grep -q "grok-codex" "$rc_file"; then
+        # Remove the grok-codex block
+        sed -i.bak '/# >>> grok-codex >>>/,/# <<< grok-codex <<</d' "$rc_file"
+        rm -f "${rc_file}.bak"
+        ok "Removed alias from $rc_file"
+    fi
+
+    # Clean config.toml - remove our managed section
+    local config_file="$GROK_HOME/config.toml"
+    if [[ -f "$config_file" ]] && grep -q "$CONFIG_MARKER" "$config_file"; then
+        # Remove everything from our marker to end of our block
+        sed -i.bak "/$CONFIG_MARKER/,/^# --- end grok-codex ---$/d" "$config_file"
+        # Also remove endpoints section if we added it
+        sed -i.bak '/^# grok-codex: bypass X auth$/d; /^models_base_url.*10531/d' "$config_file"
+        # Clean empty [endpoints] section
+        sed -i.bak '/^\[endpoints\]$/{ N; /^\[endpoints\]\n$/d; }' "$config_file"
+        rm -f "${config_file}.bak"
+        ok "Cleaned config.toml"
+    fi
+
+    printf "\n${GREEN}Uninstalled.${RESET} Grok CLI will use default X/Twitter auth again.\n"
+    printf "Restart your terminal for changes to take effect.\n\n"
+}
+
+cmd_status() {
+    printf "${BOLD}grok-codex${RESET} v%s — status\n\n" "$VERSION"
+
+    # Proxy
+    if nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null; then
+        ok "Proxy running on port $PROXY_PORT"
+    else
+        warn "Proxy not running"
+    fi
+
+    # Codex auth
+    if auth_file=$(check_codex_auth); then
+        ok "Codex auth: $auth_file"
+    else
+        error "No Codex auth found"
+    fi
+
+    # Wrapper
+    if [[ -x "$GROK_HOME/bin/$WRAPPER_NAME" ]]; then
+        ok "Wrapper installed: $GROK_HOME/bin/$WRAPPER_NAME"
+    else
+        warn "Wrapper not found"
+    fi
+
+    # Config
+    if [[ -f "$GROK_HOME/config.toml" ]] && grep -q "$CONFIG_MARKER" "$GROK_HOME/config.toml"; then
+        ok "Config: models configured"
+    else
+        warn "Config: models not configured"
+    fi
+
+    # Shell alias
+    local rc_file
+    rc_file=$(shell_rc_file)
+    if grep -q "grok-codex" "$rc_file" 2>/dev/null; then
+        ok "Shell alias: active ($rc_file)"
+    else
+        warn "Shell alias: not set"
+    fi
+
+    # Models (if proxy is up)
+    if nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null; then
+        printf "\nAvailable models:\n"
+        curl -s "http://127.0.0.1:$PROXY_PORT/v1/models" | \
+            python3 -c "import sys,json; [print(f'  - {m[\"id\"]}') for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null || true
+    fi
+    echo
+}
+
+cmd_models() {
+    # Start proxy temporarily to discover models
+    local started_proxy=false
+    if ! nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null; then
+        openai-oauth --port "$PROXY_PORT" --host 127.0.0.1 > /tmp/openai-oauth.log 2>&1 &
+        local pid=$!
+        started_proxy=true
+        for i in $(seq 1 20); do
+            nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null && break
+            sleep 0.3
+        done
+    fi
+
+    printf "${BOLD}Models available on your Codex subscription:${RESET}\n\n"
+    curl -s "http://127.0.0.1:$PROXY_PORT/v1/models" | \
+        python3 -c "
+import sys, json
+data = json.load(sys.stdin).get('data', [])
+for m in data:
+    print(f'  {m[\"id\"]}')
+" 2>/dev/null || echo "  (failed to fetch - is your Codex auth valid?)"
+
+    if [[ "$started_proxy" == "true" ]]; then
+        kill "$pid" 2>/dev/null || true
+    fi
+    echo
+}
+
+cmd_help() {
+    printf "${BOLD}grok-codex${RESET} v%s\n" "$VERSION"
+    printf "Use your OpenAI Codex subscription with Grok CLI\n\n"
+    printf "Usage:\n"
+    printf "  grok-codex setup      Install and configure everything\n"
+    printf "  grok-codex uninstall  Remove all grok-codex configuration\n"
+    printf "  grok-codex status     Check current setup status\n"
+    printf "  grok-codex models     List models available on your account\n"
+    printf "  grok-codex help       Show this help\n"
+    printf "  grok-codex version    Show version\n"
+    printf "\nEnvironment:\n"
+    printf "  GROK_CODEX_PORT  Proxy port (default: 10531)\n"
+    printf "  GROK_HOME        Grok config dir (default: ~/.grok)\n"
+    printf "  CODEX_HOME       Codex config dir (default: ~/.codex)\n\n"
+}
+
+# --- Setup helpers ---
+
+create_wrapper() {
+    local grok_bin="$1"
+    local wrapper_path="$GROK_HOME/bin/$WRAPPER_NAME"
+
+    cat > "$wrapper_path" << 'WRAPPER_EOF'
+#!/usr/bin/env bash
+# grok-with-codex: Auto-start openai-oauth proxy and run Grok CLI
+# Managed by grok-codex — https://github.com/Arjun-Ingole/grok-codex
+
+set -euo pipefail
+
+PROXY_PORT="${GROK_CODEX_PORT:-10531}"
+PROXY_PID=""
+GROK_BIN="__GROK_BIN__"
+
+# Skip X/Twitter auth — proxy handles auth via Codex OAuth tokens
+export GROK_CODE_XAI_API_KEY="codex-proxy-no-key-needed"
+
+proxy_running() {
+    nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null
+}
+
+start_proxy() {
+    if proxy_running; then
+        return 0
+    fi
+
+    printf '\033[2m[codex-proxy]\033[0m Starting on port %s...' "$PROXY_PORT"
+    openai-oauth --port "$PROXY_PORT" --host 127.0.0.1 > /tmp/openai-oauth.log 2>&1 &
+    PROXY_PID=$!
+
+    local max_wait=20
+    local waited=0
+    while ! proxy_running; do
+        sleep 0.3
+        waited=$((waited + 1))
+        if (( waited >= max_wait )); then
+            printf ' FAILED\n'
+            echo "Error: Proxy failed to start. Check /tmp/openai-oauth.log" >&2
+            echo "Try: npx @openai/codex login (to refresh auth)" >&2
+            kill "$PROXY_PID" 2>/dev/null || true
+            exit 1
+        fi
+    done
+    printf ' ready\n'
+}
+
+cleanup() {
+    if [[ -n "${PROXY_PID:-}" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
+        kill "$PROXY_PID" 2>/dev/null || true
+        wait "$PROXY_PID" 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT INT TERM
+
+start_proxy
+"$GROK_BIN" "$@"
+WRAPPER_EOF
+
+    # Replace placeholder with actual grok binary path
+    sed -i.bak "s|__GROK_BIN__|$grok_bin|g" "$wrapper_path"
+    rm -f "${wrapper_path}.bak"
+    chmod +x "$wrapper_path"
+}
+
+update_grok_config() {
+    local config_file="$GROK_HOME/config.toml"
+
+    # Create config dir if needed
+    mkdir -p "$GROK_HOME"
+
+    # If config doesn't exist, create it
+    if [[ ! -f "$config_file" ]]; then
+        touch "$config_file"
+    fi
+
+    # Remove old grok-codex config if present
+    if grep -q "$CONFIG_MARKER" "$config_file"; then
+        sed -i.bak "/$CONFIG_MARKER/,/^# --- end grok-codex ---$/d" "$config_file"
+        rm -f "${config_file}.bak"
+    fi
+
+    # Add/update [endpoints] section for auth bypass
+    if grep -q '^\[endpoints\]' "$config_file"; then
+        # Update existing endpoints section
+        if ! grep -q "models_base_url" "$config_file"; then
+            sed -i.bak '/^\[endpoints\]/a\
+# grok-codex: bypass X auth\
+models_base_url = "http://127.0.0.1:'"$PROXY_PORT"'/v1"' "$config_file"
+            rm -f "${config_file}.bak"
+        fi
+    else
+        # Add endpoints section after [cli] or at top
+        if grep -q '^\[cli\]' "$config_file"; then
+            sed -i.bak '/^\[cli\]/,/^$/{
+                /^$/a\
+\
+[endpoints]\
+# grok-codex: bypass X auth\
+models_base_url = "http://127.0.0.1:'"$PROXY_PORT"'/v1"
+            }' "$config_file"
+            rm -f "${config_file}.bak"
+            # If sed didn't work (no blank line after [cli]), append after first block
+            if ! grep -q '^\[endpoints\]' "$config_file"; then
+                printf '\n[endpoints]\n# grok-codex: bypass X auth\nmodels_base_url = "http://127.0.0.1:%s/v1"\n' "$PROXY_PORT" >> "$config_file"
+            fi
+        else
+            printf '[endpoints]\n# grok-codex: bypass X auth\nmodels_base_url = "http://127.0.0.1:%s/v1"\n\n' "$PROXY_PORT" >> "$config_file"
+        fi
+    fi
+
+    # Add/update [models] default
+    if grep -q '^\[models\]' "$config_file"; then
+        if ! grep -q 'default.*=.*"gpt-5' "$config_file"; then
+            sed -i.bak 's/^\[models\]/[models]\ndefault = "gpt-5.5"/' "$config_file"
+            rm -f "${config_file}.bak"
+        fi
+    else
+        printf '\n[models]\ndefault = "gpt-5.5"\n' >> "$config_file"
+    fi
+
+    # Append model definitions
+    cat >> "$config_file" << EOF
+
+$CONFIG_MARKER
+
+[model."gpt-5.5"]
+model = "gpt-5.5"
+base_url = "http://127.0.0.1:$PROXY_PORT/v1"
+name = "GPT-5.5 (Codex)"
+api_backend = "chat_completions"
+context_window = 1048576
+max_completion_tokens = 65536
+
+[model."gpt-5.4"]
+model = "gpt-5.4"
+base_url = "http://127.0.0.1:$PROXY_PORT/v1"
+name = "GPT-5.4 (Codex)"
+api_backend = "chat_completions"
+context_window = 200000
+
+[model."gpt-5.4-mini"]
+model = "gpt-5.4-mini"
+base_url = "http://127.0.0.1:$PROXY_PORT/v1"
+name = "GPT-5.4 Mini (Codex)"
+api_backend = "chat_completions"
+context_window = 200000
+
+[model."gpt-5.3-codex"]
+model = "gpt-5.3-codex"
+base_url = "http://127.0.0.1:$PROXY_PORT/v1"
+name = "GPT-5.3 Codex"
+api_backend = "chat_completions"
+context_window = 192000
+
+[model."gpt-5.2"]
+model = "gpt-5.2"
+base_url = "http://127.0.0.1:$PROXY_PORT/v1"
+name = "GPT-5.2 (Codex)"
+api_backend = "chat_completions"
+context_window = 128000
+
+# --- end grok-codex ---
+EOF
+}
+
+add_shell_alias() {
+    local rc_file
+    rc_file=$(shell_rc_file)
+    local shell_name
+    shell_name=$(detect_shell)
+
+    # Remove old block if present
+    if [[ -f "$rc_file" ]] && grep -q "grok-codex" "$rc_file"; then
+        sed -i.bak '/# >>> grok-codex >>>/,/# <<< grok-codex <<</d' "$rc_file"
+        rm -f "${rc_file}.bak"
+    fi
+
+    if [[ "$shell_name" == "fish" ]]; then
+        cat >> "$rc_file" << EOF
+
+# >>> grok-codex >>>
+# Use Codex subscription with Grok CLI (managed by grok-codex)
+alias grok "\$HOME/.grok/bin/$WRAPPER_NAME"
+# <<< grok-codex <<<
+EOF
+    else
+        cat >> "$rc_file" << EOF
+
+# >>> grok-codex >>>
+# Use Codex subscription with Grok CLI (managed by grok-codex)
+alias grok='\$HOME/.grok/bin/$WRAPPER_NAME'
+# <<< grok-codex <<<
+EOF
+    fi
+}
+
+# --- Main ---
+
+main() {
+    local cmd="${1:-help}"
+
+    case "$cmd" in
+        setup|install)   cmd_setup ;;
+        uninstall|remove) cmd_uninstall ;;
+        status)          cmd_status ;;
+        models)          cmd_models ;;
+        help|--help|-h)  cmd_help ;;
+        version|--version|-v) echo "grok-codex $VERSION" ;;
+        *)
+            error "Unknown command: $cmd"
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
