@@ -63,13 +63,14 @@ Models are determined by your Codex subscription tier. Run `grok-codex models` t
 ## Commands
 
 ```
-grok-codex setup       # Install and configure everything
-grok-codex uninstall   # Remove all grok-codex configuration
-grok-codex status      # Check current setup status
-grok-codex models      # List models available on your account
-grok-codex accounts    # List available Codex accounts
-grok-codex switch      # Switch to a different Codex account
-grok-codex help        # Show help
+grok-codex setup         # Install and configure everything
+grok-codex uninstall     # Remove all grok-codex configuration
+grok-codex status        # Check current setup status
+grok-codex models        # List models available on your account
+grok-codex accounts      # List available Codex accounts
+grok-codex switch        # Switch to a different Codex account
+grok-codex auto-switch   # Configure automatic account switching
+grok-codex help          # Show help
 ```
 
 ## Multi-Account Support
@@ -103,6 +104,26 @@ grok-codex switch 01
 ```
 
 The next time you run `grok`, it will use the switched account automatically.
+
+### Automatic account switching
+
+Enable auto-switching to automatically use the account with the lowest usage:
+
+```bash
+# Enable auto-switch
+grok-codex auto-switch enable
+
+# Configure thresholds (switch if 5h usage > 10% or weekly usage > 5%)
+grok-codex auto-switch config --5h 10 --weekly 5
+
+# Disable auto-switch
+grok-codex auto-switch disable
+
+# Check current status
+grok-codex auto-switch
+```
+
+When auto-switch is enabled, the tool will automatically switch to the account with the lowest usage rate, helping you stay within your subscription limits and avoid hitting rate caps.
 
 ### Check active account
 
