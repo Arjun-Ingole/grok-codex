@@ -63,22 +63,68 @@ Models are determined by your Codex subscription tier. Run `grok-codex models` t
 ## Commands
 
 ```
-grok-codex setup      # Install and configure everything
-grok-codex uninstall  # Remove all grok-codex configuration
-grok-codex status     # Check current setup status
-grok-codex models     # List models available on your account
-grok-codex help       # Show help
+grok-codex setup       # Install and configure everything
+grok-codex uninstall   # Remove all grok-codex configuration
+grok-codex status      # Check current setup status
+grok-codex models      # List models available on your account
+grok-codex accounts    # List available Codex accounts
+grok-codex switch      # Switch to a different Codex account
+grok-codex help        # Show help
 ```
+
+## Multi-Account Support
+
+If you have multiple Codex accounts (e.g., personal + team, Plus + Business), you can switch between them without reconfiguration.
+
+### List accounts
+
+```bash
+grok-codex accounts
+```
+
+Output:
+```
+     ACCOUNT                  PLAN      5H USAGE     WEEKLY USAGE            LAST ACTIVITY
+------------------------------------------------------------------------------------------
+  01 arjun@pazy.io            Business  0% (16:08)   26% (10:10 on 11 Jun)   4m ago       
+* 02 arjuningole38@gmail.com  Plus      99% (20:29)  100% (15:29 on 17 Jun)  Now          
+```
+
+The `*` marks the currently active account.
+
+### Switch accounts
+
+```bash
+# Switch by email
+grok-codex switch arjun@pazy.io
+
+# Or by account number
+grok-codex switch 01
+```
+
+The next time you run `grok`, it will use the switched account automatically.
+
+### Check active account
+
+```bash
+grok-codex status
+```
+
+Shows the currently active Codex account and all other setup info.
+
+> **Note:** Multi-account support requires [`codex-auth`](https://github.com/EvanZhouDev/codex-auth) to be installed. Install via: `brew install codex-auth`
 
 ## How it works
 
 1. **OAuth proxy**: Uses [openai-oauth](https://github.com/EvanZhouDev/openai-oauth) which reads your `~/.codex/auth.json` (created by `codex login`) and proxies requests to OpenAI's Codex backend (`chatgpt.com/backend-api/codex/responses`)
 
-2. **Auth bypass**: Sets `GROK_CODE_XAI_API_KEY` (dummy value) and `[endpoints] models_base_url` in Grok's config, which makes Grok skip X/Twitter auth and use API-key mode instead
+2. **Auth bypass**: Sets `XAI_API_KEY` (dummy value) and `[endpoints] models_base_url` in Grok's config, which makes Grok skip X/Twitter auth and use API-key mode instead
 
 3. **Wrapper script**: A thin bash wrapper (`~/.grok/bin/grok-with-codex`) that starts the proxy before launching Grok and cleans up on exit
 
 4. **Shell alias**: Overrides the `grok` command to use the wrapper
+
+5. **Multi-account support**: Integrates with [`codex-auth`](https://github.com/EvanZhouDev/codex-auth) to automatically use whichever account is currently active
 
 ## If your auth expires
 
