@@ -320,8 +320,9 @@ PROXY_PORT="${GROK_CODEX_PORT:-10531}"
 PROXY_PID=""
 GROK_BIN="__GROK_BIN__"
 
-# Skip X/Twitter auth — proxy handles auth via Codex OAuth tokens
-export GROK_CODE_XAI_API_KEY="codex-proxy-no-key-needed"
+# Dummy credentials - tells grok that auth is handled by proxy
+# Without this, grok prompts for X/Twitter auth even though we're using the proxy
+export XAI_API_KEY="xai-use-proxy"
 
 proxy_running() {
     nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null
@@ -366,7 +367,7 @@ start_proxy
 WRAPPER_EOF
 
     # Replace placeholder with actual grok binary path
-    sed -i.bak "s|__GROK_BIN__|$grok_bin|g" "$wrapper_path"
+    sed -i.bak "s|__GROK_BIN__|${grok_bin//|/\\|}|g" "$wrapper_path"
     rm -f "${wrapper_path}.bak"
     chmod +x "$wrapper_path"
 }
@@ -388,9 +389,16 @@ update_grok_config() {
         rm -f "${config_file}.bak"
     fi
 
+    # Also remove any standalone grok-codex model definitions to avoid duplicates
+    sed -i.bak '/^\[model\."gpt-5\.5"\].*codex/,/^$/d; /^\[model\."gpt-5\.4"\].*codex/,/^$/d; /^\[model\."gpt-5\.4-mini"\].*codex/,/^$/d; /^\[model\."gpt-5\.3-codex"\]/,/^$/d; /^\[model\."gpt-5\.2"\].*codex/,/^$/d' "$config_file"
+    rm -f "${config_file}.bak"
+
     # Add/update [endpoints] section for auth bypass
     if grep -q '^\[endpoints\]' "$config_file"; then
-        # Update existing endpoints section
+        # Update existing endpoints section - remove old models_base_url if exists
+        sed -i.bak '/^models_base_url.*127\.0\.0\.1.*10531/d' "$config_file"
+        rm -f "${config_file}.bak"
+        # Add the new one if not present
         if ! grep -q "models_base_url" "$config_file"; then
             sed -i.bak '/^\[endpoints\]/a\
 # grok-codex: bypass X auth\
