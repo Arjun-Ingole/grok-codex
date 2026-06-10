@@ -341,6 +341,12 @@ cmd_switch() {
         local current_account
         current_account=$(get_current_codex_account)
         ok "Switched to: $current_account"
+        
+        # Kill proxy if running so it restarts with new account
+        if command -v pkill &>/dev/null; then
+            pkill -f "openai-oauth" 2>/dev/null || true
+            info "Proxy will restart with new account on next grok command"
+        fi
     else
         error "Failed to switch account"
         exit 1
@@ -449,6 +455,8 @@ set -euo pipefail
 PROXY_PORT="${GROK_CODEX_PORT:-10531}"
 PROXY_PID=""
 GROK_BIN="__GROK_BIN__"
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+PROXY_ACCOUNT_FILE="/tmp/grok-codex-proxy-account"
 
 # Dummy credentials - tells grok that auth is handled by proxy
 # Without this, grok prompts for X/Twitter auth even though we're using the proxy
@@ -458,14 +466,52 @@ proxy_running() {
     nc -z 127.0.0.1 "$PROXY_PORT" 2>/dev/null
 }
 
+get_current_account() {
+    # Get the currently active codex-auth account
+    if command -v codex-auth &>/dev/null; then
+        codex-auth list 2>/dev/null | grep '^\*' | awk '{print $3}' || echo ""
+    else
+        echo ""
+    fi
+}
+
+account_changed() {
+    # Check if the account has changed since proxy started
+    local current_account
+    current_account=$(get_current_account)
+    
+    if [[ -f "$PROXY_ACCOUNT_FILE" ]]; then
+        local stored_account
+        stored_account=$(cat "$PROXY_ACCOUNT_FILE")
+        [[ "$current_account" != "$stored_account" ]]
+    else
+        # No stored account means first time or account changed
+        false
+    fi
+}
+
 start_proxy() {
-    if proxy_running; then
+    local current_account
+    current_account=$(get_current_account)
+    
+    # Check if proxy is running and account hasn't changed
+    if proxy_running && ! account_changed; then
         return 0
     fi
-
+    
+    # Stop old proxy if it's running
+    if proxy_running; then
+        printf '\033[2m[codex-proxy]\033[0m Restarting due to account change...'
+        pkill -f "openai-oauth.*$PROXY_PORT" 2>/dev/null || true
+        sleep 1
+    fi
+    
     printf '\033[2m[codex-proxy]\033[0m Starting on port %s...' "$PROXY_PORT"
     openai-oauth --port "$PROXY_PORT" --host 127.0.0.1 > /tmp/openai-oauth.log 2>&1 &
     PROXY_PID=$!
+    
+    # Store current account
+    echo "$current_account" > "$PROXY_ACCOUNT_FILE"
 
     local max_wait=20
     local waited=0
