@@ -347,18 +347,86 @@ cmd_switch() {
     fi
 }
 
+cmd_auto_switch() {
+    if ! check_codex_auth_tool; then
+        error "codex-auth not found. Install it first:"
+        echo "  brew install codex-auth"
+        exit 1
+    fi
+
+    local action="${1:-}"
+    case "$action" in
+        enable)
+            info "Enabling auto-switch..."
+            if codex-auth config auto enable; then
+                ok "Auto-switch enabled"
+                echo ""
+                info "Auto-switch will now automatically switch to the account with lowest usage"
+                info "Current settings can be checked with: codex-auth status"
+            else
+                error "Failed to enable auto-switch"
+                exit 1
+            fi
+            ;;
+        disable)
+            info "Disabling auto-switch..."
+            if codex-auth config auto disable; then
+                ok "Auto-switch disabled"
+            else
+                error "Failed to disable auto-switch"
+                exit 1
+            fi
+            ;;
+        "")
+            printf "${BOLD}Usage:${RESET}\n"
+            printf "  grok-codex auto-switch enable                           Enable auto-switching\n"
+            printf "  grok-codex auto-switch disable                          Disable auto-switching\n"
+            printf "  grok-codex auto-switch config --5h %% [--weekly %%]     Configure thresholds\n"
+            printf "\n${BOLD}Examples:${RESET}\n"
+            printf "  grok-codex auto-switch enable\n"
+            printf "  grok-codex auto-switch config --5h 10 --weekly 5\n"
+            printf "\n${BOLD}Current status:${RESET}\n"
+            codex-auth status
+            ;;
+        config)
+            shift
+            if [[ $# -eq 0 ]]; then
+                error "Specify threshold percentages"
+                echo "Usage: grok-codex auto-switch config --5h <percent> [--weekly <percent>]"
+                echo "Example: grok-codex auto-switch config --5h 10 --weekly 5"
+                exit 1
+            fi
+            info "Configuring auto-switch thresholds..."
+            if codex-auth config auto "$@"; then
+                ok "Auto-switch thresholds configured"
+                echo ""
+                codex-auth status
+            else
+                error "Failed to configure auto-switch"
+                exit 1
+            fi
+            ;;
+        *)
+            error "Unknown action: $action"
+            echo "Usage: grok-codex auto-switch {enable|disable|config}"
+            exit 1
+            ;;
+    esac
+}
+
 cmd_help() {
     printf "${BOLD}grok-codex${RESET} v%s\n" "$VERSION"
     printf "Use your OpenAI Codex subscription with Grok CLI\n\n"
     printf "Usage:\n"
-    printf "  grok-codex setup       Install and configure everything\n"
-    printf "  grok-codex uninstall   Remove all grok-codex configuration\n"
-    printf "  grok-codex status      Check current setup status\n"
-    printf "  grok-codex models      List models available on your account\n"
-    printf "  grok-codex accounts    List available Codex accounts\n"
-    printf "  grok-codex switch      Switch to a different Codex account\n"
-    printf "  grok-codex help        Show this help\n"
-    printf "  grok-codex version     Show version\n"
+    printf "  grok-codex setup          Install and configure everything\n"
+    printf "  grok-codex uninstall      Remove all grok-codex configuration\n"
+    printf "  grok-codex status         Check current setup status\n"
+    printf "  grok-codex models         List models available on your account\n"
+    printf "  grok-codex accounts       List available Codex accounts\n"
+    printf "  grok-codex switch         Switch to a different Codex account\n"
+    printf "  grok-codex auto-switch    Manage automatic account switching\n"
+    printf "  grok-codex help           Show this help\n"
+    printf "  grok-codex version        Show version\n"
     printf "\nEnvironment:\n"
     printf "  GROK_CODEX_PORT  Proxy port (default: 10531)\n"
     printf "  GROK_HOME        Grok config dir (default: ~/.grok)\n"
@@ -577,6 +645,7 @@ EOF
 
 main() {
     local cmd="${1:-help}"
+    shift || true  # Remove first argument, allow if there are no args
 
     case "$cmd" in
         setup|install)   cmd_setup ;;
@@ -584,7 +653,8 @@ main() {
         status)          cmd_status ;;
         models)          cmd_models ;;
         accounts)        cmd_accounts ;;
-        switch)          cmd_switch "${2:-}" ;;
+        switch)          cmd_switch "${1:-}" ;;
+        auto-switch)     cmd_auto_switch "$@" ;;
         help|--help|-h)  cmd_help ;;
         version|--version|-v) echo "grok-codex $VERSION" ;;
         *)
