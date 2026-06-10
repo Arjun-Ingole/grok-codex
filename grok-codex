@@ -97,6 +97,17 @@ check_openai_oauth() {
     command -v openai-oauth &>/dev/null
 }
 
+check_codex_auth_tool() {
+    command -v codex-auth &>/dev/null
+}
+
+get_current_codex_account() {
+    # Return the email of the currently active codex-auth account
+    if check_codex_auth_tool; then
+        codex-auth list 2>/dev/null | grep '^\*' | awk '{print $3}' || true
+    fi
+}
+
 # --- Commands ---
 
 cmd_setup() {
@@ -227,6 +238,17 @@ cmd_status() {
         error "No Codex auth found"
     fi
 
+    # Current account
+    if check_codex_auth_tool; then
+        local current_account
+        current_account=$(get_current_codex_account)
+        if [[ -n "$current_account" ]]; then
+            ok "Active account: $current_account"
+        else
+            warn "No active account"
+        fi
+    fi
+
     # Wrapper
     if [[ -x "$GROK_HOME/bin/$WRAPPER_NAME" ]]; then
         ok "Wrapper installed: $GROK_HOME/bin/$WRAPPER_NAME"
@@ -287,16 +309,56 @@ for m in data:
     echo
 }
 
+cmd_accounts() {
+    if ! check_codex_auth_tool; then
+        error "codex-auth not found. Install it first:"
+        echo "  brew install codex-auth"
+        exit 1
+    fi
+
+    printf "${BOLD}Available Codex accounts:${RESET}\n\n"
+    codex-auth list
+    echo
+}
+
+cmd_switch() {
+    if ! check_codex_auth_tool; then
+        error "codex-auth not found. Install it first:"
+        echo "  brew install codex-auth"
+        exit 1
+    fi
+
+    local query="${1:-}"
+    if [[ -z "$query" ]]; then
+        error "Specify account email or number to switch to"
+        echo "Usage: grok-codex switch <email|number>"
+        echo ""
+        codex-auth list
+        exit 1
+    fi
+
+    if codex-auth switch "$query" 2>&1 | tail -1; then
+        local current_account
+        current_account=$(get_current_codex_account)
+        ok "Switched to: $current_account"
+    else
+        error "Failed to switch account"
+        exit 1
+    fi
+}
+
 cmd_help() {
     printf "${BOLD}grok-codex${RESET} v%s\n" "$VERSION"
     printf "Use your OpenAI Codex subscription with Grok CLI\n\n"
     printf "Usage:\n"
-    printf "  grok-codex setup      Install and configure everything\n"
-    printf "  grok-codex uninstall  Remove all grok-codex configuration\n"
-    printf "  grok-codex status     Check current setup status\n"
-    printf "  grok-codex models     List models available on your account\n"
-    printf "  grok-codex help       Show this help\n"
-    printf "  grok-codex version    Show version\n"
+    printf "  grok-codex setup       Install and configure everything\n"
+    printf "  grok-codex uninstall   Remove all grok-codex configuration\n"
+    printf "  grok-codex status      Check current setup status\n"
+    printf "  grok-codex models      List models available on your account\n"
+    printf "  grok-codex accounts    List available Codex accounts\n"
+    printf "  grok-codex switch      Switch to a different Codex account\n"
+    printf "  grok-codex help        Show this help\n"
+    printf "  grok-codex version     Show version\n"
     printf "\nEnvironment:\n"
     printf "  GROK_CODEX_PORT  Proxy port (default: 10531)\n"
     printf "  GROK_HOME        Grok config dir (default: ~/.grok)\n"
@@ -521,6 +583,8 @@ main() {
         uninstall|remove) cmd_uninstall ;;
         status)          cmd_status ;;
         models)          cmd_models ;;
+        accounts)        cmd_accounts ;;
+        switch)          cmd_switch "${2:-}" ;;
         help|--help|-h)  cmd_help ;;
         version|--version|-v) echo "grok-codex $VERSION" ;;
         *)
