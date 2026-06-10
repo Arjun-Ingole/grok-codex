@@ -621,36 +621,40 @@ model = "gpt-5.5"
 base_url = "http://127.0.0.1:$PROXY_PORT/v1"
 name = "GPT-5.5 (Codex)"
 api_backend = "chat_completions"
-context_window = 1048576
-max_completion_tokens = 65536
+context_window = 1000000
+max_completion_tokens = 128000
 
 [model."gpt-5.4"]
 model = "gpt-5.4"
 base_url = "http://127.0.0.1:$PROXY_PORT/v1"
 name = "GPT-5.4 (Codex)"
 api_backend = "chat_completions"
-context_window = 200000
+context_window = 1000000
+max_completion_tokens = 128000
 
 [model."gpt-5.4-mini"]
 model = "gpt-5.4-mini"
 base_url = "http://127.0.0.1:$PROXY_PORT/v1"
 name = "GPT-5.4 Mini (Codex)"
 api_backend = "chat_completions"
-context_window = 200000
+context_window = 400000
+max_completion_tokens = 128000
 
 [model."gpt-5.3-codex"]
 model = "gpt-5.3-codex"
 base_url = "http://127.0.0.1:$PROXY_PORT/v1"
 name = "GPT-5.3 Codex"
 api_backend = "chat_completions"
-context_window = 192000
+context_window = 200000
+max_completion_tokens = 4096
 
 [model."gpt-5.2"]
 model = "gpt-5.2"
 base_url = "http://127.0.0.1:$PROXY_PORT/v1"
 name = "GPT-5.2 (Codex)"
 api_backend = "chat_completions"
-context_window = 128000
+context_window = 200000
+max_completion_tokens = 4096
 
 # --- end grok-codex ---
 EOF
